@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "$id": "schema://creep/LedgerEntry.v1.0",
+  "title": "LedgerEntry",
+  "type": "object",
+  "properties": {
+    "ledger_entry_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "tenant_id": {
+      "type": "string"
+    },
+    "project_id": {
+      "type": "string"
+    },
+    "env": {
+      "type": "string"
+    },
+    "asset_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "task_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "external_ref": {
+      "type": "string"
+    },
+    "direction": {
+      "type": "string",
+      "enum": [
+        "IN",
+        "OUT"
+      ]
+    },
+    "amount": {
+      "type": "number",
+      "minimum": 0
+    },
+    "currency": {
+      "type": "string",
+      "pattern": "^[A-Z]{3}$"
+    },
+    "reason": {
+      "type": "string"
+    },
+    "category": {
+      "type": "string"
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "meta": {
+      "type": "object"
+    },
+    "occurred_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "recorded_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "ledger_entry_id",
+    "tenant_id",
+    "env",
+    "direction",
+    "amount",
+    "currency",
+    "reason",
+    "category",
+    "occurred_at",
+    "recorded_at"
+  ],
+  "additionalProperties": false
+}
