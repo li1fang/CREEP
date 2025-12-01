@@ -1,0 +1,159 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "$id": "schema://creep/TaskOrder.v1.0",
+  "type": "object",
+  "properties": {
+    "task_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "idempotency_key": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "tenant_id": {
+      "type": "string"
+    },
+    "project_id": {
+      "type": "string"
+    },
+    "env": {
+      "type": "string"
+    },
+    "external_ref": {
+      "type": "string"
+    },
+    "task_type": {
+      "type": "string"
+    },
+    "task_category": {
+      "type": "string"
+    },
+    "description": {
+      "type": "string"
+    },
+    "priority": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "timeout_ms": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "max_total_cost": {
+      "type": "number",
+      "minimum": 0
+    },
+    "currency": {
+      "type": "string",
+      "pattern": "^[A-Z]{3}$"
+    },
+    "business_value_hint": {
+      "type": "number"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "PENDING",
+        "QUEUED",
+        "RUNNING",
+        "SUCCESS",
+        "FAILED",
+        "CANCELLED",
+        "TIMEOUT",
+        "DEAD_LETTER"
+      ]
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "queued_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "started_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "finished_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "result_code": {
+      "type": "string"
+    },
+    "result_message": {
+      "type": "string"
+    },
+    "lease_ids": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "format": "uuid"
+      }
+    },
+    "resource_hints": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "sku_category": {
+            "type": "string"
+          },
+          "sku_code": {
+            "type": "string"
+          },
+          "min_count": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "attributes": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "sku_category"
+        ],
+        "additionalProperties": true
+      }
+    },
+    "constraints": {
+      "type": "object"
+    },
+    "tenant_policies_version": {
+      "type": "string"
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "task_version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "task_id",
+    "idempotency_key",
+    "tenant_id",
+    "env",
+    "task_type",
+    "status",
+    "priority",
+    "timeout_ms",
+    "currency",
+    "task_version",
+    "created_at",
+    "updated_at"
+  ],
+  "additionalProperties": false
+}
