@@ -110,12 +110,12 @@ graph TD
     subgraph Audit [审计与归因]
         H -->|记录| I[DB: AssetEvent]
         H -->|消耗| J[DB: LedgerEntry (Task Burn)]
-        H -->|更新| K[DB: AssetSnapshot (COOLING/BANNED)]
+        H -->|更新| K[DB: AssetSnapshot (READY/PRODUCT/COOLING/BANNED)]
     end
 
     subgraph Sales [销售与交付]
-        L[外部 API 请求] -->|匹配| M[DB: AssetSnapshot (PRODUCT)]
-        M -->|交付| N[Client]
+        L[外部 API 请求] -->|匹配| K
+        K -->|交付| N[Client]
         N -->|收入| O[DB: LedgerEntry (IN)]
     end
 ```
