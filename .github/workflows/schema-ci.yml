@@ -1,0 +1,24 @@
+name: Schema CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  validate-schemas:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Check generated API artifacts
+        run: python src/tools/api_codegen.py --check
+      - name: Run validation tests
+        env:
+          PYTHONPATH: .
+        run: python -m unittest discover -s tests
