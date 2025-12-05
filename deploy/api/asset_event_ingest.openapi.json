@@ -1,0 +1,174 @@
+{
+  "components": {
+    "schemas": {
+      "AssetEvent": {
+        "$id": "schema://creep/AssetEvent.v1.0",
+        "$schema": "https://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "asset_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "causation_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "context": {
+            "type": "object"
+          },
+          "correlation_id": {
+            "type": "string"
+          },
+          "env": {
+            "type": "string"
+          },
+          "error_code": {
+            "type": "string"
+          },
+          "error_message": {
+            "type": "string"
+          },
+          "event_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "event_type": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "http_status": {
+            "maximum": 599,
+            "minimum": 100,
+            "type": "integer"
+          },
+          "latency_ms": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "lease_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "new_status": {
+            "type": "string"
+          },
+          "occurred_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "old_status": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "provider_status": {
+            "type": "string"
+          },
+          "recorded_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "retryable": {
+            "type": "boolean"
+          },
+          "severity": {
+            "enum": [
+              "DEBUG",
+              "INFO",
+              "WARN",
+              "ERROR"
+            ],
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "task_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "tenant_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "version": {
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "event_id",
+          "tenant_id",
+          "asset_id",
+          "event_type",
+          "occurred_at",
+          "recorded_at",
+          "version"
+        ],
+        "title": "AssetEvent",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "description": "Append-only ingest endpoint aligned with schemas/v1.0/AssetEvent.json",
+    "title": "AssetEvent Ingest API",
+    "version": "1.0.0"
+  },
+  "openapi": "3.0.3",
+  "paths": {
+    "/api/v1/asset-events": {
+      "post": {
+        "operationId": "postAssetEvent",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssetEvent"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "ok": true,
+                  "status": "accepted"
+                }
+              }
+            },
+            "description": "Accepted"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "error_code": "E_SCHEMA_REQUIRED",
+                  "error_message": "event_id: 'event_id' is a required property",
+                  "error_path": "event_id",
+                  "ok": false
+                }
+              }
+            },
+            "description": "Schema validation failed"
+          }
+        },
+        "summary": "Ingest an AssetEvent"
+      }
+    }
+  }
+}
