@@ -1,0 +1,87 @@
+"""Background reconciliation loops for asset lifecycle transitions."""
+
+from typing import List, Sequence
+
+
+class Janitor:
+    """Reconciles stuck assets and cooling assets back into the READY pool."""
+
+    BATCH_SIZE = 100
+
+    SELECT_EXPIRED_LOCKS_SQL = (
+        "SELECT id FROM creep_assets "
+        "WHERE status='LOCKED' AND lock_expires_at < CURRENT_TIMESTAMP "
+        "FOR UPDATE SKIP LOCKED LIMIT %s"
+    )
+    RECOVER_LOCKS_SQL = (
+        "UPDATE creep_assets "
+        "SET status='READY', lock_id=NULL, lock_expires_at=NULL, fail_count=COALESCE(fail_count, 0) + 1 "
+        "WHERE id = ANY(%s)"
+    )
+
+    SELECT_EXPIRED_COOLING_SQL = (
+        "SELECT id FROM creep_assets "
+        "WHERE status='COOLING' AND cool_down_until < CURRENT_TIMESTAMP "
+        "FOR UPDATE SKIP LOCKED LIMIT %s"
+    )
+    RECOVER_COOLING_SQL = "UPDATE creep_assets SET status='READY', cool_down_until=NULL WHERE id = ANY(%s)"
+
+    INSERT_EVENT_SQL = (
+        "INSERT INTO asset_events (asset_id, event_type, occurred_at, recorded_at) "
+        "VALUES (%s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+    )
+
+    def __init__(self, db_conn) -> None:
+        self.db_conn = db_conn
+
+    def run_once(self) -> None:
+        """Execute one pass of each reconciliation routine."""
+
+        self.recover_timeouts()
+        self.process_cooling()
+
+    def recover_timeouts(self) -> List[str]:
+        """Release assets whose locks have expired."""
+
+        try:
+            with self.db_conn.cursor() as cursor:
+                cursor.execute(self.SELECT_EXPIRED_LOCKS_SQL, (self.BATCH_SIZE,))
+                rows: Sequence[Sequence[str]] = cursor.fetchall()
+                asset_ids = [row[0] for row in rows]
+
+                if not asset_ids:
+                    self.db_conn.rollback()
+                    return []
+
+                cursor.execute(self.RECOVER_LOCKS_SQL, (asset_ids,))
+                for asset_id in asset_ids:
+                    cursor.execute(self.INSERT_EVENT_SQL, (asset_id, "LOCK_TIMEOUT_RECOVERY"))
+
+            self.db_conn.commit()
+            return asset_ids
+        except Exception:
+            self.db_conn.rollback()
+            raise
+
+    def process_cooling(self) -> List[str]:
+        """Return cooled assets to the READY pool."""
+
+        try:
+            with self.db_conn.cursor() as cursor:
+                cursor.execute(self.SELECT_EXPIRED_COOLING_SQL, (self.BATCH_SIZE,))
+                rows: Sequence[Sequence[str]] = cursor.fetchall()
+                asset_ids = [row[0] for row in rows]
+
+                if not asset_ids:
+                    self.db_conn.rollback()
+                    return []
+
+                cursor.execute(self.RECOVER_COOLING_SQL, (asset_ids,))
+                for asset_id in asset_ids:
+                    cursor.execute(self.INSERT_EVENT_SQL, (asset_id, "COOLING_ENDED"))
+
+            self.db_conn.commit()
+            return asset_ids
+        except Exception:
+            self.db_conn.rollback()
+            raise
