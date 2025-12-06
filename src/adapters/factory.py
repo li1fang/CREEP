@@ -1,11 +1,11 @@
 """Factory for loading vendor adapters."""
 from __future__ import annotations
 
-import os
 from typing import Any, Mapping, MutableMapping, Type
 
 from .base import BaseAdapter
 from .mock_vendor import MockAdapter
+from src.config import load_prefixed_env
 
 
 class AdapterFactory:
@@ -34,9 +34,4 @@ class AdapterFactory:
         """Load adapter-specific config from the environment."""
 
         prefix = f"ADAPTER_{name.upper()}_"
-        config: dict[str, Any] = {}
-        for key, value in os.environ.items():
-            if key.startswith(prefix):
-                config_key = key.removeprefix(prefix).lower()
-                config[config_key] = value
-        return config
+        return load_prefixed_env(prefix)

@@ -2,11 +2,13 @@
 
 from typing import List, Sequence
 
+from src.config import settings
+
 
 class Janitor:
     """Reconciles stuck assets and cooling assets back into the READY pool."""
 
-    BATCH_SIZE = 100
+    BATCH_SIZE = settings.janitor_batch_size
 
     SELECT_EXPIRED_LOCKS_SQL = (
         "SELECT id FROM creep_assets "
