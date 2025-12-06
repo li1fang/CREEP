@@ -9,6 +9,7 @@ class Janitor:
     """Reconciles stuck assets and cooling assets back into the READY pool."""
 
     BATCH_SIZE = settings.janitor_batch_size
+    MAX_PROCESS_LIMIT = settings.janitor_max_process_limit
 
     SELECT_EXPIRED_LOCKS_SQL = (
         "SELECT id FROM creep_assets "
@@ -45,22 +46,30 @@ class Janitor:
     def recover_timeouts(self) -> List[str]:
         """Release assets whose locks have expired."""
 
+        processed_count = 0
+        recovered_assets: List[str] = []
+
         try:
             with self.db_conn.cursor() as cursor:
-                cursor.execute(self.SELECT_EXPIRED_LOCKS_SQL, (self.BATCH_SIZE,))
-                rows: Sequence[Sequence[str]] = cursor.fetchall()
-                asset_ids = [row[0] for row in rows]
+                while processed_count < self.MAX_PROCESS_LIMIT:
+                    cursor.execute(self.SELECT_EXPIRED_LOCKS_SQL, (self.BATCH_SIZE,))
+                    rows: Sequence[Sequence[str]] = cursor.fetchall()
+                    asset_ids = [row[0] for row in rows]
 
-                if not asset_ids:
-                    self.db_conn.rollback()
-                    return []
+                    if not asset_ids:
+                        self.db_conn.rollback()
+                        return recovered_assets
 
-                cursor.execute(self.RECOVER_LOCKS_SQL, (asset_ids,))
-                for asset_id in asset_ids:
-                    cursor.execute(self.INSERT_EVENT_SQL, (asset_id, "LOCK_TIMEOUT_RECOVERY"))
+                    cursor.execute(self.RECOVER_LOCKS_SQL, (asset_ids,))
+                    for asset_id in asset_ids:
+                        cursor.execute(self.INSERT_EVENT_SQL, (asset_id, "LOCK_TIMEOUT_RECOVERY"))
 
-            self.db_conn.commit()
-            return asset_ids
+                    recovered_assets.extend(asset_ids)
+                    processed_count += len(asset_ids)
+                    self.db_conn.commit()
+
+                    if len(asset_ids) < self.BATCH_SIZE or processed_count >= self.MAX_PROCESS_LIMIT:
+                        return recovered_assets
         except Exception:
             self.db_conn.rollback()
             raise
@@ -68,22 +77,30 @@ class Janitor:
     def process_cooling(self) -> List[str]:
         """Return cooled assets to the READY pool."""
 
+        processed_count = 0
+        cooled_assets: List[str] = []
+
         try:
             with self.db_conn.cursor() as cursor:
-                cursor.execute(self.SELECT_EXPIRED_COOLING_SQL, (self.BATCH_SIZE,))
-                rows: Sequence[Sequence[str]] = cursor.fetchall()
-                asset_ids = [row[0] for row in rows]
+                while processed_count < self.MAX_PROCESS_LIMIT:
+                    cursor.execute(self.SELECT_EXPIRED_COOLING_SQL, (self.BATCH_SIZE,))
+                    rows: Sequence[Sequence[str]] = cursor.fetchall()
+                    asset_ids = [row[0] for row in rows]
 
-                if not asset_ids:
-                    self.db_conn.rollback()
-                    return []
+                    if not asset_ids:
+                        self.db_conn.rollback()
+                        return cooled_assets
 
-                cursor.execute(self.RECOVER_COOLING_SQL, (asset_ids,))
-                for asset_id in asset_ids:
-                    cursor.execute(self.INSERT_EVENT_SQL, (asset_id, "COOLING_ENDED"))
+                    cursor.execute(self.RECOVER_COOLING_SQL, (asset_ids,))
+                    for asset_id in asset_ids:
+                        cursor.execute(self.INSERT_EVENT_SQL, (asset_id, "COOLING_ENDED"))
 
-            self.db_conn.commit()
-            return asset_ids
+                    cooled_assets.extend(asset_ids)
+                    processed_count += len(asset_ids)
+                    self.db_conn.commit()
+
+                    if len(asset_ids) < self.BATCH_SIZE or processed_count >= self.MAX_PROCESS_LIMIT:
+                        return cooled_assets
         except Exception:
             self.db_conn.rollback()
             raise

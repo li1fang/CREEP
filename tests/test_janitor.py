@@ -15,6 +15,11 @@ class JanitorTests(unittest.TestCase):
         self.db_mock.commit = MagicMock()
         self.db_mock.rollback = MagicMock()
 
+        self.original_batch_size = Janitor.BATCH_SIZE
+        self.original_max_process_limit = Janitor.MAX_PROCESS_LIMIT
+        self.addCleanup(setattr, Janitor, "BATCH_SIZE", self.original_batch_size)
+        self.addCleanup(setattr, Janitor, "MAX_PROCESS_LIMIT", self.original_max_process_limit)
+
     def test_recovers_expired_locks(self):
         self.cursor_mock.fetchall.return_value = [("asset-1",)]
 
@@ -58,6 +63,24 @@ class JanitorTests(unittest.TestCase):
         self.assertEqual(2, len(select_calls))
         update_calls = [call for call in self.cursor_mock.execute.call_args_list if call[0][0] == Janitor.RECOVER_LOCKS_SQL]
         self.assertEqual(1, len(update_calls))
+
+    def test_run_once_processes_multiple_batches_when_full(self):
+        Janitor.BATCH_SIZE = 2
+        Janitor.MAX_PROCESS_LIMIT = 10
+        self.cursor_mock.fetchall.side_effect = [
+            [("asset-1",), ("asset-2",)],
+            [("asset-3",)],
+            [],
+        ]
+
+        janitor = Janitor(self.db_mock)
+        janitor.run_once()
+
+        select_calls = [
+            call for call in self.cursor_mock.execute.call_args_list
+            if call[0][0] == Janitor.SELECT_EXPIRED_LOCKS_SQL
+        ]
+        self.assertEqual(2, len(select_calls))
 
 
 if __name__ == "__main__":
