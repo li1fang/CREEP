@@ -28,20 +28,11 @@ class LoaderMatchingTests(unittest.TestCase):
             )
         ]
 
-        candidate_assets = [
-            ("asset-us", "RAW_NET", "ip.us", {"geo": "US"}),
-            ("asset-uk", "RAW_NET", "ip.uk", {"geo": "UK"}),
-        ]
-
         locked_assets = [("asset-uk", "RAW_NET", "ip.uk", {"geo": "UK"})]
 
         lease_rows = [("lease-1",)]
 
-        self.cursor_mock.fetchall.side_effect = [
-            task_row,
-            candidate_assets,
-            locked_assets,
-        ]
+        self.cursor_mock.fetchall.side_effect = [task_row, locked_assets]
         self.cursor_mock.fetchone.side_effect = lease_rows
 
         loader = Loader(self.db_mock, self.redis_mock, queue_name="creep:test")
@@ -49,11 +40,11 @@ class LoaderMatchingTests(unittest.TestCase):
 
         self.cursor_mock.execute.assert_any_call(Loader.CLAIM_PENDING_TASKS_SQL, (1,))
         self.cursor_mock.execute.assert_any_call(
-            Loader.SELECT_CANDIDATE_ASSETS_SQL, ("RAW_NET", None, None)
+            Loader.LOCK_MATCHING_ASSETS_SQL,
+            ("RAW_NET", None, None, json.dumps({"geo": "UK"}), 1),
         )
-        self.cursor_mock.execute.assert_any_call(
-            f"{Loader.LOCK_ASSETS_SQL} LIMIT %s", ("RAW_NET", None, None, 1)
-        )
+        executed_sqls = [call[0][0] for call in self.cursor_mock.execute.call_args_list]
+        self.assertTrue(any("@>" in sql for sql in executed_sqls))
         self.cursor_mock.execute.assert_any_call(
             Loader.UPDATE_ASSET_STATUS_SQL, (["asset-uk"],)
         )

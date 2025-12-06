@@ -21,20 +21,14 @@ class Loader:
         "LIMIT %s"
     )
 
-    SELECT_CANDIDATE_ASSETS_SQL = (
-        "SELECT id, sku_category, sku_code, attributes "
-        "FROM creep_assets "
-        "WHERE status='READY' "
-        "AND sku_category=%s "
-        "AND (%s IS NULL OR sku_code LIKE %s)"
-    )
-
-    LOCK_ASSETS_SQL = (
-        "SELECT id, sku_category, sku_code, attributes "
+    LOCK_MATCHING_ASSETS_SQL = (
+        "SELECT id, sku_category, sku_code, meta_spec "
         "FROM creep_assets "
         "WHERE status='READY' "
         "AND sku_category=%s "
         "AND (%s IS NULL OR sku_code LIKE %s) "
+        "AND meta_spec @> %s::jsonb "
+        "LIMIT %s "
         "FOR UPDATE SKIP LOCKED"
     )
 
@@ -105,10 +99,6 @@ class Loader:
             if not sku_category:
                 return []
 
-            candidates = self._find_candidates(cursor, sku_category, sku_code, attributes)
-            if len(candidates) < min_count:
-                return []
-
             locked = self._lock_candidates(cursor, sku_category, sku_code, attributes, min_count)
             if len(locked) < min_count:
                 return []
@@ -128,31 +118,17 @@ class Loader:
 
         return selected_assets
 
-    def _find_candidates(
-        self, cursor, sku_category: str, sku_code: str, attributes: Dict[str, str]
-    ) -> List[Sequence]:
-        like_pattern = self._to_like_pattern(sku_code)
-        cursor.execute(
-            self.SELECT_CANDIDATE_ASSETS_SQL,
-            (sku_category, sku_code, like_pattern),
-        )
-        rows = cursor.fetchall()
-        return [row for row in rows if self._attributes_match(attributes, row[3])]
-
     def _lock_candidates(
         self, cursor, sku_category: str, sku_code: str, attributes: Dict[str, str], limit: int
     ) -> List[Sequence]:
         like_pattern = self._to_like_pattern(sku_code)
+        attributes_json = json.dumps(attributes or {})
         cursor.execute(
-            f"{self.LOCK_ASSETS_SQL} LIMIT %s",
-            (sku_category, sku_code, like_pattern, limit),
+            self.LOCK_MATCHING_ASSETS_SQL,
+            (sku_category, sku_code, like_pattern, attributes_json, limit),
         )
         rows = cursor.fetchall()
-        return [row for row in rows if self._attributes_match(attributes, row[3])][:limit]
-
-    def _attributes_match(self, expected: Dict[str, str], actual: Dict[str, str]) -> bool:
-        actual = actual or {}
-        return all(actual.get(key) == value for key, value in expected.items())
+        return rows
 
     def _insert_leases(
         self,
