@@ -4,11 +4,13 @@ import json
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Sequence
 
+from src.config import settings
+
 
 class Loader:
     """Hydrates a Redis queue with task-aware lease payloads."""
 
-    BATCH_SIZE = 1
+    BATCH_SIZE = settings.loader_batch_size
 
     CLAIM_PENDING_TASKS_SQL = (
         "SELECT task_id, tenant_id, resource_hints, timeout_ms "

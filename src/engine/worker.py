@@ -7,6 +7,7 @@ from typing import Dict, List, Optional
 
 from src.adapters.base import AdapterError, BaseAdapter
 from src.adapters.factory import AdapterFactory
+from src.config import settings
 
 
 LOGGER = logging.getLogger(__name__)
@@ -15,7 +16,8 @@ LOGGER = logging.getLogger(__name__)
 class Worker:
     """Single-threaded worker that executes queued tasks."""
 
-    POLL_INTERVAL = 1
+    POLL_INTERVAL = settings.worker_poll_interval
+    MOCK_SUCCESS_RATE = settings.worker_mock_success_rate
 
     SELECT_TASK_SQL = "SELECT task_type, timeout_ms FROM task_orders WHERE task_id=%s"
     SELECT_LEASES_SQL = (
