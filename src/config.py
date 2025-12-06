@@ -16,6 +16,7 @@ class Settings(BaseSettings):
 
     loader_batch_size: int = 1
     janitor_batch_size: int = 100
+    janitor_max_process_limit: int = 1000
     worker_poll_interval: float = 1.0
     worker_mock_success_rate: float = 0.8
 
