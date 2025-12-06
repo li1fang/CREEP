@@ -1,21 +1,44 @@
-"""Worker service that consumes assets from Redis and finalizes execution state."""
+"""Worker service that consumes task payloads from Redis and finalizes execution."""
 
+import json
+import logging
 import random
 import time
-from typing import Optional
+from typing import Dict, List, Optional
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 class Worker:
-    """Single-threaded worker that executes queued assets."""
+    """Single-threaded worker that executes queued tasks."""
 
     POLL_INTERVAL = 1
 
-    SELECT_ASSET_SQL = "SELECT tenant_id, project_id FROM creep_assets WHERE id=%s"
-    UPDATE_SUCCESS_SQL = (
-        "UPDATE creep_assets SET status='COOLING', cool_down_until = CURRENT_TIMESTAMP + INTERVAL '10 seconds' "
-        "WHERE id=%s"
+    MOCK_SUCCESS_RATE_TICKET = 0.5
+    MOCK_SUCCESS_RATE_CAPTCHA = 0.9
+    MOCK_SUCCESS_RATE_DEFAULT = 0.8
+
+    SELECT_TASK_SQL = "SELECT task_type, timeout_ms FROM task_orders WHERE task_id=%s"
+    SELECT_LEASES_SQL = (
+        "SELECT l.lease_id, l.task_id, l.asset_id, a.tenant_id, a.project_id, a.meta_spec "
+        "FROM leases l "
+        "JOIN creep_assets a ON l.asset_id = a.id "
+        "WHERE l.lease_id = ANY(%s)"
     )
-    UPDATE_FAILURE_SQL = "UPDATE creep_assets SET status='BANNED', health_score = health_score - 10 WHERE id=%s"
+    UPDATE_TASK_SUCCESS_SQL = (
+        "UPDATE task_orders SET status='SUCCESS', finished_at=CURRENT_TIMESTAMP, result_code=NULL WHERE task_id=%s"
+    )
+    UPDATE_TASK_FAILURE_SQL = (
+        "UPDATE task_orders SET status='FAILED', finished_at=CURRENT_TIMESTAMP, result_code=%s WHERE task_id=%s"
+    )
+    UPDATE_LEASE_SUCCESS_SQL = "UPDATE leases SET status='RELEASED' WHERE lease_id = ANY(%s)"
+    UPDATE_LEASE_FAILURE_SQL = "UPDATE leases SET status='REVOKED' WHERE lease_id = ANY(%s)"
+    UPDATE_ASSET_COOLING_SQL = (
+        "UPDATE creep_assets SET status='COOLING', cool_down_until = CURRENT_TIMESTAMP + INTERVAL '10 seconds' "
+        "WHERE id = ANY(%s)"
+    )
+    UPDATE_ASSET_FAILURE_SQL = "UPDATE creep_assets SET status='BANNED' WHERE id = ANY(%s)"
     INSERT_EVENT_SQL = (
         "INSERT INTO asset_events (asset_id, event_type, severity, error_code, occurred_at, recorded_at) "
         "VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
@@ -30,62 +53,172 @@ class Worker:
         self.db_conn = db_conn
 
     def run_forever(self) -> None:
-        """Continuously process assets from the queue."""
+        """Continuously process task payloads from the queue."""
 
         while True:
-            asset_id = self.dispenser.acquire()
-            if asset_id is None:
+            payload = self.dispenser.acquire()
+            if payload is None:
                 time.sleep(self.POLL_INTERVAL)
                 continue
 
-            self._process_one(asset_id)
+            self._process_one(payload)
 
-    def _process_one(self, asset_id: str) -> None:
-        """Process a single asset through the mock execution lifecycle."""
+    def _process_one(self, payload: str) -> None:
+        """Process a single task order and settle the related leases."""
 
-        tenant_id, project_id = self._load_asset_context(asset_id)
+        parsed = self._parse_payload(payload)
+        if parsed is None:
+            return
 
-        # Simulate execution duration
-        time.sleep(0.1)
-        success = random.random() < 0.8
+        task_id = parsed.get("task_id")
+        lease_ids = parsed.get("lease_ids") or []
+        if not task_id:
+            LOGGER.error("Received payload without task_id: %s", payload)
+            return
 
         try:
             with self.db_conn.cursor() as cursor:
+                task_row = self._fetch_task(cursor, task_id)
+                if task_row is None:
+                    LOGGER.critical(
+                        "Task %s not found during hydration. Dropping payload.", task_id
+                    )
+                    self.db_conn.rollback()
+                    return
+
+                leases = self._fetch_leases(cursor, lease_ids)
+
+            missing_leases = set(lease_ids) - {lease["lease_id"] for lease in leases}
+            invalid_task_link = any(lease["task_id"] != task_id for lease in leases)
+            missing_assets = any(lease.get("asset_id") is None for lease in leases)
+
+            if missing_assets or invalid_task_link or missing_leases:
+                result_code = "DATA_INCONSISTENCY" if leases else "RESOURCE_ERROR"
+                with self.db_conn.cursor() as cursor:
+                    if missing_leases:
+                        LOGGER.critical(
+                            "Missing leases for task %s: %s", task_id, sorted(missing_leases)
+                        )
+                    if missing_assets:
+                        LOGGER.critical("Missing assets for task %s", task_id)
+                    if invalid_task_link:
+                        LOGGER.critical("Lease/task mismatch detected for task %s", task_id)
+                    self._settle_failure(
+                        cursor, task_id, leases, result_code, lease_ids
+                    )
+                self.db_conn.commit()
+                return
+
+            task_type, _timeout_ms = task_row
+            success = self._execute_task(task_type)
+
+            with self.db_conn.cursor() as cursor:
                 if success:
-                    cursor.execute(self.UPDATE_SUCCESS_SQL, (asset_id,))
-                    cursor.execute(
-                        self.INSERT_EVENT_SQL,
-                        (asset_id, "TASK_SUCCESS", "INFO", None),
-                    )
-                    cursor.execute(
-                        self.INSERT_LEDGER_SQL,
-                        (asset_id, tenant_id, project_id, "OUT", "TASK_BURN", 0.01),
-                    )
+                    self._settle_success(cursor, task_id, leases)
                 else:
-                    cursor.execute(self.UPDATE_FAILURE_SQL, (asset_id,))
-                    cursor.execute(
-                        self.INSERT_EVENT_SQL,
-                        (asset_id, "TASK_FAIL", "ERROR", "MOCK_FAIL"),
-                    )
-                    cursor.execute(
-                        self.INSERT_LEDGER_SQL,
-                        (asset_id, tenant_id, project_id, "OUT", "TASK_BURN", 0.01),
-                    )
+                    self._settle_failure(cursor, task_id, leases, "EXECUTION_FAILED", lease_ids)
 
             self.db_conn.commit()
         except Exception:
             self.db_conn.rollback()
             raise
 
-    def _load_asset_context(self, asset_id: str) -> tuple:
-        """Fetch tenant and project identifiers for the asset."""
+    def _parse_payload(self, payload: str) -> Optional[Dict]:
+        try:
+            if isinstance(payload, bytes):
+                payload = payload.decode()
+            return json.loads(payload)
+        except Exception:
+            LOGGER.error("Unable to parse payload: %s", payload)
+            return None
 
-        with self.db_conn.cursor() as cursor:
-            cursor.execute(self.SELECT_ASSET_SQL, (asset_id,))
-            row: Optional[tuple] = cursor.fetchone()
+    def _fetch_task(self, cursor, task_id: str) -> Optional[tuple]:
+        cursor.execute(self.SELECT_TASK_SQL, (task_id,))
+        return cursor.fetchone()
 
-        if row is None:
-            raise ValueError(f"Asset {asset_id} not found")
+    def _fetch_leases(self, cursor, lease_ids: List[str]) -> List[Dict]:
+        if not lease_ids:
+            return []
 
-        tenant_id, project_id = row
-        return tenant_id, project_id
+        cursor.execute(self.SELECT_LEASES_SQL, (lease_ids,))
+        rows = cursor.fetchall() or []
+        leases: List[Dict] = []
+        for lease_id, task_id, asset_id, tenant_id, project_id, meta_spec in rows:
+            leases.append(
+                {
+                    "lease_id": lease_id,
+                    "task_id": task_id,
+                    "asset_id": asset_id,
+                    "tenant_id": tenant_id,
+                    "project_id": project_id,
+                    "meta_spec": meta_spec,
+                }
+            )
+        return leases
+
+    def _execute_task(self, task_type: str) -> bool:
+        if task_type == "TICKET_SNIPER":
+            time.sleep(2.0)
+            return random.random() < self.MOCK_SUCCESS_RATE_TICKET
+        if task_type == "CAPTCHA_SOLVE":
+            time.sleep(0.5)
+            return random.random() < self.MOCK_SUCCESS_RATE_CAPTCHA
+
+        time.sleep(0.1)
+        return random.random() < self.MOCK_SUCCESS_RATE_DEFAULT
+
+    def _settle_success(self, cursor, task_id: str, leases: List[Dict]) -> None:
+        asset_ids = [lease["asset_id"] for lease in leases]
+        lease_ids = [lease["lease_id"] for lease in leases]
+        cursor.execute(self.UPDATE_TASK_SUCCESS_SQL, (task_id,))
+        if lease_ids:
+            cursor.execute(self.UPDATE_LEASE_SUCCESS_SQL, (lease_ids,))
+        if asset_ids:
+            cursor.execute(self.UPDATE_ASSET_COOLING_SQL, (asset_ids,))
+            for lease in leases:
+                cursor.execute(
+                    self.INSERT_EVENT_SQL,
+                    (lease["asset_id"], "TASK_SUCCESS", "INFO", None),
+                )
+                cursor.execute(
+                    self.INSERT_LEDGER_SQL,
+                    (
+                        lease["asset_id"],
+                        lease.get("tenant_id"),
+                        lease.get("project_id"),
+                        "OUT",
+                        "TASK_BURN",
+                        0.01,
+                    ),
+                )
+
+    def _settle_failure(
+        self,
+        cursor,
+        task_id: str,
+        leases: List[Dict],
+        result_code: str,
+        lease_ids: List[str],
+    ) -> None:
+        asset_ids = [lease["asset_id"] for lease in leases]
+        cursor.execute(self.UPDATE_TASK_FAILURE_SQL, (result_code, task_id))
+        if lease_ids:
+            cursor.execute(self.UPDATE_LEASE_FAILURE_SQL, (lease_ids,))
+        if asset_ids:
+            cursor.execute(self.UPDATE_ASSET_FAILURE_SQL, (asset_ids,))
+            for lease in leases:
+                cursor.execute(
+                    self.INSERT_EVENT_SQL,
+                    (lease["asset_id"], "TASK_FAIL", "ERROR", result_code),
+                )
+                cursor.execute(
+                    self.INSERT_LEDGER_SQL,
+                    (
+                        lease["asset_id"],
+                        lease.get("tenant_id"),
+                        lease.get("project_id"),
+                        "OUT",
+                        "TASK_BURN",
+                        0.01,
+                    ),
+                )
