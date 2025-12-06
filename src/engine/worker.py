@@ -2,9 +2,11 @@
 
 import json
 import logging
-import random
 import time
 from typing import Dict, List, Optional
+
+from src.adapters.base import AdapterError, BaseAdapter
+from src.adapters.factory import AdapterFactory
 
 
 LOGGER = logging.getLogger(__name__)
@@ -14,10 +16,6 @@ class Worker:
     """Single-threaded worker that executes queued tasks."""
 
     POLL_INTERVAL = 1
-
-    MOCK_SUCCESS_RATE_TICKET = 0.5
-    MOCK_SUCCESS_RATE_CAPTCHA = 0.9
-    MOCK_SUCCESS_RATE_DEFAULT = 0.8
 
     SELECT_TASK_SQL = "SELECT task_type, timeout_ms FROM task_orders WHERE task_id=%s"
     SELECT_LEASES_SQL = (
@@ -48,9 +46,17 @@ class Worker:
         "VALUES (%s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)"
     )
 
-    def __init__(self, dispenser, db_conn) -> None:
+    def __init__(
+        self,
+        dispenser,
+        db_conn,
+        adapter: Optional[BaseAdapter] = None,
+        adapter_name: str = "mock",
+        adapter_config: Optional[Dict] = None,
+    ) -> None:
         self.dispenser = dispenser
         self.db_conn = db_conn
+        self.adapter = adapter or AdapterFactory.create(adapter_name, adapter_config)
 
     def run_forever(self) -> None:
         """Continuously process task payloads from the queue."""
@@ -110,7 +116,7 @@ class Worker:
                 return
 
             task_type, _timeout_ms = task_row
-            success = self._execute_task(task_type)
+            success = self._execute_task(task_type, leases)
 
             with self.db_conn.cursor() as cursor:
                 if success:
@@ -156,16 +162,30 @@ class Worker:
             )
         return leases
 
-    def _execute_task(self, task_type: str) -> bool:
-        if task_type == "TICKET_SNIPER":
-            time.sleep(2.0)
-            return random.random() < self.MOCK_SUCCESS_RATE_TICKET
-        if task_type == "CAPTCHA_SOLVE":
-            time.sleep(0.5)
-            return random.random() < self.MOCK_SUCCESS_RATE_CAPTCHA
+    def _execute_task(self, task_type: str, leases: List[Dict]) -> bool:
+        del task_type
+        acquired_assets: List[str] = []
+        try:
+            for lease in leases:
+                specs = lease.get("meta_spec") or {}
+                payload = self.adapter.acquire(specs)
+                acquired_assets.append(payload.get("asset_id", lease.get("asset_id")))
 
-        time.sleep(0.1)
-        return random.random() < self.MOCK_SUCCESS_RATE_DEFAULT
+            for asset_id in acquired_assets:
+                health = self.adapter.check_health(asset_id)
+                if health.get("status") == "unhealthy":
+                    return False
+
+            return True
+        except AdapterError:
+            LOGGER.exception("Adapter failure while executing task")
+            return False
+        finally:
+            for asset_id in acquired_assets:
+                try:
+                    self.adapter.release(asset_id)
+                except AdapterError:
+                    LOGGER.exception("Adapter failed to release asset %s", asset_id)
 
     def _settle_success(self, cursor, task_id: str, leases: List[Dict]) -> None:
         asset_ids = [lease["asset_id"] for lease in leases]
